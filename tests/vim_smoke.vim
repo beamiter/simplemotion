@@ -1,0 +1,30 @@
+vim9script
+
+set nocompatible nomore
+const ROOT = fnamemodify(resolve(expand('<sfile>:p')), ':h:h')
+execute 'set runtimepath^=' .. fnameescape(ROOT)
+execute 'source ' .. fnameescape(ROOT .. '/plugin/simplemotion.vim')
+
+new
+setline(1, ['ab one ab', 'nothing', 'AB smartcase', 'ab last'])
+var targets = simplemotion#FindTargets('ab', false)
+assert_equal([[1, 1], [1, 8], [3, 1], [4, 1]],
+  mapnew(targets, (_, target) => [target.lnum, target.col]))
+g:simplemotion_smartcase = 1
+targets = simplemotion#FindTargets('AB', false)
+assert_equal([[3, 1]], mapnew(targets, (_, target) => [target.lnum, target.col]))
+
+for count in [1, 2, 26, 27, 200]
+  var labels = simplemotion#LabelCodes(count)
+  assert_equal(count, len(labels))
+  assert_equal(count, len(uniq(sort(copy(labels)))))
+endfor
+
+assert_equal(2, exists(':SimpleMotion'))
+assert_match('simplemotion', maparg('<Plug>(simplemotion-overwin-f2)', 'n'))
+
+if !empty(v:errors)
+  writefile(v:errors, ROOT .. '/tests/errors.log')
+  cquit
+endif
+qa!
