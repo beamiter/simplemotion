@@ -117,6 +117,18 @@ def AddMatches(targets: list<dict<any>>, winid: number, bufnr: number,
   endfor
 enddef
 
+# A window worth putting hints in.  The empty 'buftype' is an ordinary file;
+# 'acwrite' is one whose reads and writes are served by autocommands, which is
+# how a plugin like SimpleRemote presents a file that lives on another host.
+# Its text is a document the user is editing and jumping around it is exactly
+# as meaningful as in a local file, so refusing it left the plugin dead in
+# such a workspace.  Everything else — the quickfix list, help, terminals,
+# scratch panels, and the hint overlay itself — stays excluded.
+def JumpableBuffer(buf: number): bool
+  var buftype = getbufvar(buf, '&buftype')
+  return buftype ==# '' || buftype ==# 'acwrite'
+enddef
+
 export def FindTargets(text: string, all_windows: bool = true): list<dict<any>>
   if empty(text)
     return []
@@ -125,7 +137,7 @@ export def FindTargets(text: string, all_windows: bool = true): list<dict<any>>
   var pattern = SearchPattern(text)
   var windows = all_windows ? getwininfo() : [getwininfo(win_getid())[0]]
   for info in windows
-    if info.tabnr != tabpagenr() || getbufvar(info.bufnr, '&buftype') !=# ''
+    if info.tabnr != tabpagenr() || !JumpableBuffer(info.bufnr)
       continue
     endif
     AddMatches(targets, info.winid, info.bufnr,

@@ -8,4 +8,9 @@
 Map the corresponding <Plug> targets to preferred keys.  Target labels come
 from g:simplemotion_keys and are extended to multiple characters as needed.
 
+Hints are placed in windows holding an ordinary file and in windows holding a
+buffer whose reads and writes are served by autocommands ('buftype' acwrite) —
+which is how a plugin such as SimpleRemote presents a file that lives on
+another host.  Scratch, quickfix, help and terminal windows are skipped.
+
 vim:tw=78:ts=8:noet:ft=help:norl:
