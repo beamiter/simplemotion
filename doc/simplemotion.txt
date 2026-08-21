@@ -13,4 +13,20 @@ buffer whose reads and writes are served by autocommands ('buftype' acwrite) —
 which is how a plugin such as SimpleRemote presents a file that lives on
 another host.  Scratch, quickfix, help and terminal windows are skipped.
 
+CONFIGURATION                                      *simplemotion-configuration*
+
+g:simplemotion_keys
+        Printable characters used for labels.  Duplicate characters are
+        ignored; an invalid value or fewer than two unique keys falls back to
+        "asdfghjkl".
+
+g:simplemotion_smartcase
+        With the default 1, an uppercase two-character needle is
+        case-sensitive and any other needle ignores case.
+
+g:simplemotion_max_targets
+        Hard cap shared by two-character searches and line motions.  Default
+        500.  Negative values are treated as 0, which disables target
+        collection; an invalid type falls back to 500.
+
 vim:tw=78:ts=8:noet:ft=help:norl:

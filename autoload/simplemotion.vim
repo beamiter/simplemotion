@@ -1,15 +1,24 @@
 vim9script
 
 def ValidKeys(): list<string>
+  var configured: any = get(g:, 'simplemotion_keys', '')
+  if type(configured) != v:t_string
+    configured = ''
+  endif
   var seen: dict<bool> = {}
   var keys: list<string> = []
-  for key in split(get(g:, 'simplemotion_keys', ''), '\zs')
+  for key in split(configured, '\zs')
     if key =~# '^[[:print:]]$' && !has_key(seen, key)
       seen[key] = true
       add(keys, key)
     endif
   endfor
   return len(keys) >= 2 ? keys : split('asdfghjkl', '\zs')
+enddef
+
+def MaxTargets(): number
+  var configured: any = get(g:, 'simplemotion_max_targets', 500)
+  return type(configured) == v:t_number ? max([0, configured]) : 500
 enddef
 
 export def LabelCodes(count: number): list<string>
@@ -38,7 +47,11 @@ export def LabelCodes(count: number): list<string>
 enddef
 
 def SearchPattern(text: string): string
-  var prefix = get(g:, 'simplemotion_smartcase', 1) && text =~# '[A-Z]' ? '\C' : '\c'
+  var configured: any = get(g:, 'simplemotion_smartcase', 1)
+  var smartcase = type(configured) == v:t_bool
+    ? configured
+    : type(configured) == v:t_number ? configured != 0 : true
+  var prefix = smartcase && text =~# '[A-Z]' ? '\C' : '\c'
   return prefix .. '\V' .. escape(text, '\')
 enddef
 
@@ -51,9 +64,10 @@ enddef
 # a caller takes a reading before and after and subtracts.
 var scanned = 0
 var hinted = 0
+var probed = 0
 
 export def Counters(): dict<number>
-  return {scanned: scanned, hinted: hinted}
+  return {scanned: scanned, hinted: hinted, probed: probed}
 enddef
 
 # foldclosed() and foldclosedend() only ever answer for the window that happens
@@ -64,8 +78,10 @@ enddef
 # because win_execute() runs an Ex command, and a :def function's locals are not
 # reachable from one.
 var visible_lines: list<number> = []
+var visible_skipcol = 0
 
 export def VisibleLinesProbe(first: number, last: number)
+  visible_skipcol = get(winsaveview(), 'skipcol', 0)
   # getwininfo()'s botline counts buffer lines, not screen rows, so one closed
   # fold hiding 19989 lines pushes it 19989 lines past the last row actually on
   # screen: a window displaying 11 rows reported topline=1 botline=19999, and
@@ -74,8 +90,16 @@ export def VisibleLinesProbe(first: number, last: number)
   # [lnum, foldend] can be matched by eye in the first place.  Stepping over the
   # fold is what keeps the walk proportional to the viewport rather than to the
   # file, and it is what stops hints being offered for invisible text.
+  var visible_last = last
+  if visible_last < line('$')
+    probed += 1
+    var next_screen = screenpos(win_getid(), visible_last + 1, 1)
+    if get(next_screen, 'row', 0) > 0
+      visible_last += 1
+    endif
+  endif
   var lnum = first
-  while lnum <= last
+  while lnum <= visible_last
     scanned += 1
     var foldend = foldclosedend(lnum)
     if foldend > 0
@@ -93,24 +117,67 @@ def VisibleLines(winid: number, first: number, last: number): list<number>
   # lines left over from the previous window would scatter hints across a buffer
   # that is not on screen.
   visible_lines = []
+  visible_skipcol = 0
   win_execute(winid, printf('call simplemotion#VisibleLinesProbe(%d, %d)', first, last))
   return visible_lines
 enddef
 
 def AddMatches(targets: list<dict<any>>, winid: number, bufnr: number,
-    lines: list<number>, pattern: string)
-  var maximum = get(g:, 'simplemotion_max_targets', 500)
+    lines: list<number>, pattern: string, maximum: number)
+  var infos = getwininfo(winid)
+  if empty(infos)
+    return
+  endif
+  var info = infos[0]
+  var nowrap = !getwinvar(winid, '&wrap')
+  # Wrapped continuation rows can reclaim the number column when 'cpoptions'
+  # contains `n`; use the whole window width as a conservative bound and let
+  # screenpos() filter the few over-included cells.  Nowrap has one fixed text
+  # area and can use the exact textoff subtraction.
+  var text_width = nowrap
+    ? max([1, info.width - info.textoff]) : max([1, info.width])
   for lnum in lines
     var text = getbufline(bufnr, lnum)[0]
     var start = 0
+    var last_byte_col = strlen(text) + 1
+    if !empty(text)
+      var viewport_vcol = nowrap
+        ? info.leftcol + 1
+        : lnum == info.topline ? visible_skipcol + 1 : 1
+      # With 'smoothscroll', skipcol is a layout offset rather than an exact
+      # buffer virtual column: part of the preceding screen row can remain
+      # visible. Include one conservative row before it; screenpos() removes
+      # the overreach and the scan stays bounded by the viewport.
+      var first_vcol = nowrap ? viewport_vcol
+        : max([1, viewport_vcol - info.width - info.textoff])
+      var last_vcol = nowrap
+        ? first_vcol + text_width - 1
+        : viewport_vcol + (info.height + 2) * text_width
+      var first_byte_col = virtcol2col(winid, lnum, first_vcol)
+      last_byte_col = virtcol2col(winid, lnum, last_vcol)
+      if first_byte_col <= 0 || last_byte_col <= 0
+        continue
+      endif
+      start = first_byte_col - 1
+    endif
     while start <= strlen(text)
       var byte = match(text, pattern, start)
-      if byte < 0
+      if byte < 0 || byte + 1 > last_byte_col
         break
       endif
-      add(targets, {winid: winid, bufnr: bufnr, lnum: lnum, col: byte + 1})
-      if len(targets) >= maximum
-        return
+      # A displayed buffer line is not necessarily a displayed target.  With
+      # 'nowrap' and a horizontal scroll, or on a wrapped line whose other
+      # screen rows are outside the viewport, screenpos() returns zero for the
+      # hidden columns.  Giving those matches codes produced selectable jumps
+      # for which no popup was drawn, and enough hidden matches could consume
+      # the cap before the first visible one was reached.
+      probed += 1
+      var screen = screenpos(winid, lnum, byte + 1)
+      if get(screen, 'row', 0) > 0 && get(screen, 'col', 0) > 0
+        add(targets, {winid: winid, bufnr: bufnr, lnum: lnum, col: byte + 1})
+        if len(targets) >= maximum
+          return
+        endif
       endif
       start = byte + 1
     endwhile
@@ -130,7 +197,8 @@ def JumpableBuffer(buf: number): bool
 enddef
 
 export def FindTargets(text: string, all_windows: bool = true): list<dict<any>>
-  if empty(text)
+  var maximum = MaxTargets()
+  if empty(text) || maximum == 0
     return []
   endif
   var targets: list<dict<any>> = []
@@ -141,8 +209,8 @@ export def FindTargets(text: string, all_windows: bool = true): list<dict<any>>
       continue
     endif
     AddMatches(targets, info.winid, info.bufnr,
-      VisibleLines(info.winid, info.topline, info.botline), pattern)
-    if len(targets) >= get(g:, 'simplemotion_max_targets', 500)
+      VisibleLines(info.winid, info.topline, info.botline), pattern, maximum)
+    if len(targets) >= maximum
       break
     endif
   endfor
@@ -154,9 +222,18 @@ export def LineTargets(direction: string): list<dict<any>>
   var current = line('.')
   var down = direction ==# 'down'
   var first = down ? current + 1 : info.topline
-  var last = down ? info.botline : current - 1
+  var bottom = info.botline
+  if bottom < line('$')
+    probed += 1
+    var next_screen = screenpos(win_getid(), bottom + 1, 1)
+    if get(next_screen, 'row', 0) > 0
+      bottom += 1
+    endif
+  endif
+  var last = down ? bottom : current - 1
   var targets: list<dict<any>> = []
-  if first > last
+  var maximum = MaxTargets()
+  if first > last || maximum == 0
     return targets
   endif
   # The cap FindTargets has always applied, which this scanner never did.  On a
@@ -166,7 +243,6 @@ export def LineTargets(direction: string): list<dict<any>>
   # popups for them took 61 seconds to raise and tear down.  This runs in the
   # current window only, so foldclosed() answers for the right one directly and
   # no win_execute() probe is needed.
-  var maximum = get(g:, 'simplemotion_max_targets', 500)
   var winid = win_getid()
   var buf = bufnr()
   # Walk outward from the cursor -- 'down' ascending, 'up' descending -- so the
@@ -192,11 +268,43 @@ export def LineTargets(direction: string): list<dict<any>>
     else
       var text = getline(lnum)
       if text !~# '^\s*$'
+        var jump_col = match(text, '\S') + 1
+        var hint_col = jump_col
+        probed += 1
+        var screen = screenpos(winid, lnum, hint_col)
+        if (get(screen, 'row', 0) <= 0 || get(screen, 'col', 0) <= 0)
+            && !&l:wrap
+          hint_col = virtcol2col(winid, lnum, info.leftcol + 1)
+          var last_hint_col = virtcol2col(winid, lnum,
+            info.leftcol + max([1, info.width - info.textoff]))
+          if hint_col <= 0 || last_hint_col <= 0
+            lnum = down ? lnum + 1 : lnum - 1
+            continue
+          endif
+          # leftcol may fall in a Tab that began off-screen. virtcol2col()
+          # returns that Tab's byte, whose screenpos is zero, while the next
+          # character is visible. Walk at most the visible text slice to find
+          # a real anchor; the jump column remains the first nonblank byte.
+          while hint_col <= last_hint_col
+            probed += 1
+            screen = screenpos(winid, lnum, hint_col)
+            if get(screen, 'row', 0) > 0 && get(screen, 'col', 0) > 0
+              break
+            endif
+            var char = strcharpart(strpart(text, hint_col - 1), 0, 1, true)
+            hint_col += max([1, strlen(char)])
+          endwhile
+        endif
+        if get(screen, 'row', 0) <= 0 || get(screen, 'col', 0) <= 0
+          lnum = down ? lnum + 1 : lnum - 1
+          continue
+        endif
         add(targets, {
           winid: winid,
           bufnr: buf,
           lnum: lnum,
-          col: match(text, '\S') + 1,
+          col: jump_col,
+          hint_col: hint_col,
         })
       endif
       lnum = down ? lnum + 1 : lnum - 1
@@ -235,13 +343,15 @@ def ShowHints(targets: list<dict<any>>, codes: list<string>): list<number>
   # stop should never fire; it is here because this is the loop that pays, and a
   # target past it is no worse off than one screenpos() rejects below -- it keeps
   # its code and stays selectable, it just gets no label drawn for it.
-  var maximum = get(g:, 'simplemotion_max_targets', 500)
+  var maximum = MaxTargets()
   for index in range(len(targets))
     if len(popups) >= maximum
       break
     endif
     var target = targets[index]
-    var screen = screenpos(target.winid, target.lnum, target.col)
+    probed += 1
+    var screen = screenpos(target.winid, target.lnum,
+      get(target, 'hint_col', target.col))
     if get(screen, 'row', 0) <= 0 || get(screen, 'col', 0) <= 0
       continue
     endif
@@ -330,5 +440,5 @@ export def Health()
   echomsg 'SimpleMotion health'
   echomsg $'  popupwin: {has("popupwin") ? "yes" : "no"}'
   echomsg $'  labels: {len(keys)} unique keys'
-  echomsg $'  target cap: {get(g:, "simplemotion_max_targets", 500)}'
+  echomsg $'  target cap: {MaxTargets()}'
 enddef
