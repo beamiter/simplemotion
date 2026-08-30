@@ -14,6 +14,17 @@ g:simplemotion_smartcase = 1
 targets = simplemotion#FindTargets('AB', false)
 assert_equal([[3, 1]], mapnew(targets, (_, target) => [target.lnum, target.col]))
 
+# Smartcase is not limited to ASCII capitals.  An uppercase multibyte needle
+# must not also select its lowercase spelling.
+setline(1, ['Äb', 'äb'])
+if line('$') > 2
+  deletebufline('%', 3, line('$'))
+endif
+targets = simplemotion#FindTargets('Äb', false)
+assert_equal([[1, 1]], mapnew(targets, (_, target) => [target.lnum, target.col]),
+  'Unicode uppercase was treated as a case-insensitive smartcase needle')
+setline(1, ['ab one ab', 'nothing', 'AB smartcase', 'ab last'])
+
 # The cap is a literal upper bound. Zero disables target collection instead of
 # leaking the first match through the add-then-check loop; bad runtime config
 # falls back safely rather than throwing from a motion.
@@ -188,6 +199,8 @@ assert_true(tab_anchor.row > 0 && tab_anchor.col > 0)
 new
 setline(1, ['ab remote one', 'ab remote two'])
 setlocal buftype=acwrite
+winrestview({lnum: 1, col: 1, topline: 1, leftcol: 0})
+redraw!
 targets = simplemotion#FindTargets('ab', false)
 assert_equal([[1, 1], [2, 1]],
   mapnew(targets, (_, target) => [target.lnum, target.col]),

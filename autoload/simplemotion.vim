@@ -51,7 +51,10 @@ def SearchPattern(text: string): string
   var smartcase = type(configured) == v:t_bool
     ? configured
     : type(configured) == v:t_number ? configured != 0 : true
-  var prefix = smartcase && text =~# '[A-Z]' ? '\C' : '\c'
+  # [A-Z] only sees ASCII.  Vim's case conversion follows the active
+  # multibyte encoding, so comparing with the lower-cased needle also detects
+  # uppercase characters such as Ä without making uncased scripts sensitive.
+  var prefix = smartcase && text !=# tolower(text) ? '\C' : '\c'
   return prefix .. '\V' .. escape(text, '\')
 enddef
 
@@ -79,9 +82,15 @@ enddef
 # reachable from one.
 var visible_lines: list<number> = []
 var visible_skipcol = 0
+var visible_leftcol = 0
 
 export def VisibleLinesProbe(first: number, last: number)
-  visible_skipcol = get(winsaveview(), 'skipcol', 0)
+  var view = winsaveview()
+  visible_skipcol = get(view, 'skipcol', 0)
+  # leftcol is a view property.  It was added to getwininfo() later than the
+  # Vim versions this plugin supports, whereas winsaveview() has supplied it
+  # throughout that range.
+  visible_leftcol = get(view, 'leftcol', 0)
   # getwininfo()'s botline counts buffer lines, not screen rows, so one closed
   # fold hiding 19989 lines pushes it 19989 lines past the last row actually on
   # screen: a window displaying 11 rows reported topline=1 botline=19999, and
@@ -118,6 +127,7 @@ def VisibleLines(winid: number, first: number, last: number): list<number>
   # that is not on screen.
   visible_lines = []
   visible_skipcol = 0
+  visible_leftcol = 0
   win_execute(winid, printf('call simplemotion#VisibleLinesProbe(%d, %d)', first, last))
   return visible_lines
 enddef
@@ -142,7 +152,7 @@ def AddMatches(targets: list<dict<any>>, winid: number, bufnr: number,
     var last_byte_col = strlen(text) + 1
     if !empty(text)
       var viewport_vcol = nowrap
-        ? info.leftcol + 1
+        ? visible_leftcol + 1
         : lnum == info.topline ? visible_skipcol + 1 : 1
       # With 'smoothscroll', skipcol is a layout offset rather than an exact
       # buffer virtual column: part of the preceding screen row can remain
@@ -245,6 +255,7 @@ export def LineTargets(direction: string): list<dict<any>>
   # no win_execute() probe is needed.
   var winid = win_getid()
   var buf = bufnr()
+  var leftcol = get(winsaveview(), 'leftcol', 0)
   # Walk outward from the cursor -- 'down' ascending, 'up' descending -- so the
   # list already comes out nearest-first.  Collecting 'up' ascending and calling
   # reverse() at the end, as this used to, would have let the cap discard the
@@ -274,9 +285,9 @@ export def LineTargets(direction: string): list<dict<any>>
         var screen = screenpos(winid, lnum, hint_col)
         if (get(screen, 'row', 0) <= 0 || get(screen, 'col', 0) <= 0)
             && !&l:wrap
-          hint_col = virtcol2col(winid, lnum, info.leftcol + 1)
+          hint_col = virtcol2col(winid, lnum, leftcol + 1)
           var last_hint_col = virtcol2col(winid, lnum,
-            info.leftcol + max([1, info.width - info.textoff]))
+            leftcol + max([1, info.width - info.textoff]))
           if hint_col <= 0 || last_hint_col <= 0
             lnum = down ? lnum + 1 : lnum - 1
             continue
