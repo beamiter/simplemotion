@@ -241,6 +241,18 @@ assert_match('simplemotion', maparg('<Plug>(simplemotion-overwin-f2)', 'n'))
 assert_true(exists('#SimpleMotion#ColorScheme'),
   'no ColorScheme autocmd restores SimpleMotionLabel')
 
+new
+setlocal buftype= wrap
+setline(1, ['current', '   ', '', 'target'])
+cursor(1, 1)
+redraw!
+set nomagic
+var nonblank_targets = simplemotion#LineTargets('down')
+assert_equal([4], mapnew(nonblank_targets, (_, target) => target.lnum),
+  'nomagic must not turn blank lines into jump targets')
+set magic
+bwipeout!
+
 if !empty(v:errors)
   writefile(v:errors, ROOT .. '/tests/errors.log')
   cquit

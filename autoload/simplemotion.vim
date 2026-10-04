@@ -281,7 +281,7 @@ export def LineTargets(direction: string): list<dict<any>>
       lnum = down ? foldclosedend(lnum) + 1 : foldstart - 1
     else
       var text = getline(lnum)
-      if text !~# '^\s*$'
+      if text !~# '\m^\s*$'
         var jump_col = match(text, '\S') + 1
         var hint_col = jump_col
         probed += 1
