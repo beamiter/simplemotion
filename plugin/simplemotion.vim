@@ -26,3 +26,8 @@ nnoremap <silent> <Plug>(simplemotion-down) <ScriptCmd>simplemotion#Jump('down')
 nnoremap <silent> <Plug>(simplemotion-up) <ScriptCmd>simplemotion#Jump('up')<CR>
 
 highlight default SimpleMotionLabel cterm=bold ctermfg=Black ctermbg=Yellow gui=bold guifg=#282828 guibg=#ffcc66
+
+augroup SimpleMotion
+  autocmd!
+  autocmd ColorScheme * highlight default SimpleMotionLabel cterm=bold ctermfg=Black ctermbg=Yellow gui=bold guifg=#282828 guibg=#ffcc66
+augroup END

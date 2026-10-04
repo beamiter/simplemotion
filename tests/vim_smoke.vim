@@ -1,6 +1,7 @@
 vim9script
 
 set nocompatible nomore
+set cmdheight=20
 const ROOT = fnamemodify(resolve(expand('<sfile>:p')), ':h:h')
 execute 'set runtimepath^=' .. fnameescape(ROOT)
 execute 'source ' .. fnameescape(ROOT .. '/plugin/simplemotion.vim')
@@ -53,6 +54,31 @@ assert_equal([[3, 1]],
   mapnew(simplemotion#FindTargets('AB', false), (_, target) => [target.lnum, target.col]),
   'a malformed smartcase flag falls back to the documented default')
 g:simplemotion_smartcase = 1
+
+# One unique key is not enough to build codes; fall back rather than looping
+# forever (`capacity *= 1`) or emitting identical labels.
+g:simplemotion_keys = 'aaa'
+var early_labels = simplemotion#LabelCodes(3)
+assert_equal(3, len(uniq(sort(copy(early_labels)))),
+  'a single unique key was used as the alphabet')
+g:simplemotion_keys = 'asdfghjklqwertyuiopzxcvbnm'
+assert_equal([], simplemotion#LabelCodes(0))
+assert_equal([], simplemotion#LabelCodes(-3))
+assert_equal([], simplemotion#FindTargets('', false))
+
+# Blank lines are not line-motion targets, and the line under the cursor is
+# never offered as a target below it.
+setline(1, ['one', '', 'three', 'four'])
+if line('$') > 4
+  deletebufline('%', 5, line('$'))
+endif
+cursor(1, 1)
+assert_equal([3, 4], mapnew(simplemotion#LineTargets('down'), (_, t) => t.lnum))
+cursor(4, 1)
+assert_equal([], simplemotion#LineTargets('down'))
+assert_equal([3, 1], mapnew(simplemotion#LineTargets('up'), (_, t) => t.lnum))
+setline(1, ['ab one ab', 'nothing', 'AB smartcase', 'ab last'])
+cursor(1, 1)
 
 for count in [1, 2, 26, 27, 200]
   var labels = simplemotion#LabelCodes(count)
@@ -212,6 +238,8 @@ bwipeout!
 
 assert_equal(2, exists(':SimpleMotion'))
 assert_match('simplemotion', maparg('<Plug>(simplemotion-overwin-f2)', 'n'))
+assert_true(exists('#SimpleMotion#ColorScheme'),
+  'no ColorScheme autocmd restores SimpleMotionLabel')
 
 if !empty(v:errors)
   writefile(v:errors, ROOT .. '/tests/errors.log')

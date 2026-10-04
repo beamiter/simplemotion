@@ -27,6 +27,9 @@ export def LabelCodes(count: number): list<string>
   endif
   var keys = ValidKeys()
   var base = len(keys)
+  if base < 2
+    return []
+  endif
   var width = 1
   var capacity = base
   while capacity < count
