@@ -1,6 +1,6 @@
-.PHONY: check defcompile test test-folds
+.PHONY: check defcompile test test-folds test-lifecycle
 
-check: defcompile test test-folds
+check: defcompile test test-folds test-lifecycle
 
 defcompile:
 	vim -N -u NONE -n -i NONE -es -S tests/defcompile.vim
@@ -13,3 +13,7 @@ test:
 # assertion about staying inside the viewport passes without testing anything.
 test-folds:
 	vim -N -u NONE -n -i NONE -es -S tests/vim_folds.vim
+
+# A real terminal keeps getcharstr() alive while timers change the target.
+test-lifecycle:
+	python3 tests/jump_lifecycle.py

@@ -13,6 +13,10 @@ buffer whose reads and writes are served by autocommands ('buftype' acwrite) —
 which is how a plugin such as SimpleRemote presents a file that lives on
 another host.  Scratch, quickfix, help and terminal windows are skipped.
 
+While choosing a label, a closed window, replaced buffer, or edited target
+buffer cancels that jump. Even an edit elsewhere in the target buffer cancels
+conservatively; start the motion again to collect fresh hints.
+
 CONFIGURATION                                      *simplemotion-configuration*
 
 g:simplemotion_keys

@@ -408,6 +408,25 @@ def PickCode(codes: list<string>): number
   return -1
 enddef
 
+# Waiting for a label runs timers and channel callbacks. The hint is only a
+# snapshot: its window can close, show another buffer, or have its text edited.
+# Never apply the old position to that new state (including WinEnter callbacks).
+def TargetValid(target: dict<any>): bool
+  var info = getwininfo(target.winid)
+  return !empty(info) && info[0].tabnr == tabpagenr()
+    && info[0].bufnr == target.bufnr
+    && getbufvar(target.bufnr, 'changedtick', -1) == target.tick
+enddef
+
+def GoToTarget(target: dict<any>)
+  if !TargetValid(target) || !win_gotoid(target.winid)
+    return
+  endif
+  if win_getid() == target.winid && TargetValid(target)
+    cursor(target.lnum, target.col)
+  endif
+enddef
+
 export def Jump(kind: string)
   var targets: list<dict<any>>
   if kind ==# 'f2'
@@ -427,9 +446,11 @@ export def Jump(kind: string)
     echohl None
     return
   endif
+  for target in targets
+    target.tick = getbufvar(target.bufnr, 'changedtick', -1)
+  endfor
   if len(targets) == 1
-    win_gotoid(targets[0].winid)
-    cursor(targets[0].lnum, targets[0].col)
+    GoToTarget(targets[0])
     return
   endif
   var codes = LabelCodes(len(targets))
@@ -444,8 +465,7 @@ export def Jump(kind: string)
     redraw
   endtry
   if selected >= 0 && selected < len(targets)
-    win_gotoid(targets[selected].winid)
-    cursor(targets[selected].lnum, targets[selected].col)
+    GoToTarget(targets[selected])
   endif
 enddef
 
