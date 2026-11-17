@@ -17,3 +17,10 @@ test-folds:
 # A real terminal keeps getcharstr() alive while timers change the target.
 test-lifecycle:
 	python3 tests/jump_lifecycle.py
+
+# Explicit checkout dependency: local runs never clone or silently skip tests.
+.PHONY: check-integration test-whichkey
+check-integration: check test-whichkey
+
+test-whichkey:
+	python3 tests/whichkey_interaction.py

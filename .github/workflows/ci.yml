@@ -21,6 +21,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out tested SimpleWhichKey revision
+        uses: actions/checkout@v4
+        with:
+          repository: beamiter/simplewhichkey
+          ref: 86e75d0bce8e1d3a35915c887c52a226241b0c2a
+          path: .deps/simplewhichkey
+
       # vim-nox rather than the minimal build: the suite compiles every :def
       # ahead of time and drives real popups and terminals, none of which the
       # tiny build has.
@@ -30,11 +37,12 @@ jobs:
           sudo apt-get install --yes vim-nox
           vim --version
 
-      # One target, not a hand-picked list of steps. `make check` is the gate a
-      # developer runs before pushing, so it is the gate CI runs; a list here
-      # would drift from the Makefile and go quietly green.
+      # Pin the companion fix so this gate is reproducible before/after merge.
+      # Updating the pin must run both plugins together again.
       - name: Run the quality gate
-        run: make check
+        env:
+          SIMPLEWHICHKEY_ROOT: ${{ github.workspace }}/.deps/simplewhichkey
+        run: make check-integration
 
       - name: Validate help tags
         run: >-

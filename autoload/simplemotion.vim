@@ -336,14 +336,24 @@ def ReadChar(): string
 enddef
 
 def ReadNeedle(): string
+  var origin_window = win_getid()
+  var origin_buffer = bufnr()
+  var origin_tick = b:changedtick
   echo 'SimpleMotion: type two characters'
   var first = ReadChar()
-  if empty(first)
+  if empty(first) || win_getid() != origin_window
+      || bufnr() != origin_buffer || b:changedtick != origin_tick
     echo ''
     return ''
   endif
   var second = ReadChar()
   echo ''
+  # The search itself is stale if context changes before targets are collected.
+  # TargetValid() only protects the later label-selection phase.
+  if win_getid() != origin_window || bufnr() != origin_buffer
+      || b:changedtick != origin_tick
+    return ''
+  endif
   return empty(second) ? '' : first .. second
 enddef
 

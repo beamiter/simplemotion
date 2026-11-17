@@ -64,6 +64,11 @@ qa!
                 proc.wait()
                 os.close(master)
 
+    def test_replaced_buffer_during_needle_cancels(self):
+        self.run_case(
+            "  enew\n  setline(1, ['replacement', 'za match', 'last'])\n  cursor(3, 1)",
+            3, 'replacement', setup="feedkeys('z', 'nt')", kind='f2')
+
     def test_unchanged_target_jumps(self):
         self.run_case('  # no change', 2)
 
