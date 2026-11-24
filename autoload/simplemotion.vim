@@ -66,14 +66,17 @@ enddef
 # size of the file instead of the size of the viewport.  Timing assertions
 # cannot police that -- a loaded machine makes them lie in both directions --
 # so the two counts are exported and tests/vim_folds.vim budgets them directly,
-# the way simplewhichkey budgets mapping-table sweeps.  They only ever grow;
-# a caller takes a reading before and after and subtracts.
+# the way simplewhichkey budgets mapping-table sweeps. regex_bytes counts
+# the subject bytes offered to the literal matcher once per visible line;
+# it excludes Vim's own line copy and viewport-to-byte translation. Counters
+# only grow; callers take a before/after reading and subtract.
 var scanned = 0
 var hinted = 0
 var probed = 0
+var regex_bytes = 0
 
 export def Counters(): dict<number>
-  return {scanned: scanned, hinted: hinted, probed: probed}
+  return {scanned: scanned, hinted: hinted, probed: probed, regex_bytes: regex_bytes}
 enddef
 
 # foldclosed() and foldclosedend() only ever answer for the window that happens
@@ -136,7 +139,7 @@ def VisibleLines(winid: number, first: number, last: number): list<number>
 enddef
 
 def AddMatches(targets: list<dict<any>>, winid: number, bufnr: number,
-    lines: list<number>, pattern: string, maximum: number)
+    lines: list<number>, pattern: string, lookahead: number, maximum: number)
   var infos = getwininfo(winid)
   if empty(infos)
     return
@@ -151,33 +154,41 @@ def AddMatches(targets: list<dict<any>>, winid: number, bufnr: number,
     ? max([1, info.width - info.textoff]) : max([1, info.width])
   for lnum in lines
     var text = getbufline(bufnr, lnum)[0]
-    var start = 0
-    var last_byte_col = strlen(text) + 1
-    if !empty(text)
-      var viewport_vcol = nowrap
-        ? visible_leftcol + 1
-        : lnum == info.topline ? visible_skipcol + 1 : 1
-      # With 'smoothscroll', skipcol is a layout offset rather than an exact
-      # buffer virtual column: part of the preceding screen row can remain
-      # visible. Include one conservative row before it; screenpos() removes
-      # the overreach and the scan stays bounded by the viewport.
-      var first_vcol = nowrap ? viewport_vcol
-        : max([1, viewport_vcol - info.width - info.textoff])
-      var last_vcol = nowrap
-        ? first_vcol + text_width - 1
-        : viewport_vcol + (info.height + 2) * text_width
-      var first_byte_col = virtcol2col(winid, lnum, first_vcol)
-      last_byte_col = virtcol2col(winid, lnum, last_vcol)
-      if first_byte_col <= 0 || last_byte_col <= 0
-        continue
-      endif
-      start = first_byte_col - 1
+    if empty(text)
+      continue
     endif
-    while start <= strlen(text)
-      var byte = match(text, pattern, start)
-      if byte < 0 || byte + 1 > last_byte_col
+    var viewport_vcol = nowrap
+      ? visible_leftcol + 1
+      : lnum == info.topline ? visible_skipcol + 1 : 1
+    # With 'smoothscroll', skipcol is a layout offset rather than an exact
+    # buffer virtual column. Include one conservative row before it.
+    var first_vcol = nowrap ? viewport_vcol
+      : max([1, viewport_vcol - info.width - info.textoff])
+    var last_vcol = nowrap
+      ? first_vcol + text_width - 1
+      : viewport_vcol + (info.height + 2) * text_width
+    var first_byte_col = virtcol2col(winid, lnum, first_vcol)
+    var last_byte_col = virtcol2col(winid, lnum, last_vcol)
+    if first_byte_col <= 0 || last_byte_col < first_byte_col
+      continue
+    endif
+
+    # A match may start at the final visible character and end off-screen.
+    # Include that character and enough complete following characters for the
+    # literal needle, without assuming its encoded byte length matches a
+    # case-insensitive occurrence. Never offer targets starting in the tail.
+    var base = first_byte_col - 1
+    var max_start = last_byte_col - first_byte_col
+    var subject = strpart(text, base, max_start)
+      .. strpart(text, last_byte_col - 1, lookahead, true)
+    regex_bytes += strlen(subject)
+    var start = 0
+    while start <= max_start
+      var byte = match(subject, pattern, start, 1)
+      if byte < 0 || byte > max_start
         break
       endif
+      var col = base + byte + 1
       # A displayed buffer line is not necessarily a displayed target.  With
       # 'nowrap' and a horizontal scroll, or on a wrapped line whose other
       # screen rows are outside the viewport, screenpos() returns zero for the
@@ -185,9 +196,9 @@ def AddMatches(targets: list<dict<any>>, winid: number, bufnr: number,
       # for which no popup was drawn, and enough hidden matches could consume
       # the cap before the first visible one was reached.
       probed += 1
-      var screen = screenpos(winid, lnum, byte + 1)
+      var screen = screenpos(winid, lnum, col)
       if get(screen, 'row', 0) > 0 && get(screen, 'col', 0) > 0
-        add(targets, {winid: winid, bufnr: bufnr, lnum: lnum, col: byte + 1})
+        add(targets, {winid: winid, bufnr: bufnr, lnum: lnum, col: col})
         if len(targets) >= maximum
           return
         endif
@@ -216,13 +227,14 @@ export def FindTargets(text: string, all_windows: bool = true): list<dict<any>>
   endif
   var targets: list<dict<any>> = []
   var pattern = SearchPattern(text)
+  var lookahead = strchars(text)
   var windows = all_windows ? getwininfo() : [getwininfo(win_getid())[0]]
   for info in windows
     if info.tabnr != tabpagenr() || !JumpableBuffer(info.bufnr)
       continue
     endif
     AddMatches(targets, info.winid, info.bufnr,
-      VisibleLines(info.winid, info.topline, info.botline), pattern, maximum)
+      VisibleLines(info.winid, info.topline, info.botline), pattern, lookahead, maximum)
     if len(targets) >= maximum
       break
     endif

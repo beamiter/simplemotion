@@ -127,6 +127,84 @@ probe_cost = simplemotion#Counters().probed - before_probes
 assert_true(probe_cost <= (winheight(0) + 2) * winwidth(0),
   $'wrapped scan probed {probe_cost} matches outside the visible screen rows')
 
+# A result at the final displayed column may finish outside the viewport.
+# Only the match start is a hint anchor, and its second character may be wide.
+setlocal nowrap nonumber norelativenumber signcolumn=no foldcolumn=0 sidescrolloff=0
+var width = winwidth(0)
+var shift = 19
+var right = shift + width
+setline(1, repeat('x', right - 1) .. 'a界' .. repeat('x', 400))
+cursor(1, right - 5)
+winrestview({lnum: 1, col: right - 6, topline: 1, leftcol: shift})
+redraw!
+assert_true(screenpos(win_getid(), 1, right).col > 0, 'fixture starts in last visible cell')
+assert_equal(0, screenpos(win_getid(), 1, right + 1).col, 'fixture wide tail is off-screen')
+assert_equal([[1, right]], mapnew(simplemotion#FindTargets('a界', false),
+  (_, target) => [target.lnum, target.col]), 'right-edge match was truncated')
+setline(1, repeat('x', right - 1) .. 'aK' .. repeat('x', 400))
+winrestview({lnum: 1, col: right - 6, topline: 1, leftcol: shift})
+redraw!
+assert_equal([[1, right]], mapnew(simplemotion#FindTargets('ak', false),
+  (_, target) => [target.lnum, target.col]),
+  'lowercase k must match a wider case-equivalent character beyond the right edge')
+
+# Match starts and absolute UTF-8 byte columns must agree with the actual
+# screen layout across tabs, wide text and both wrap modes. This oracle
+# deliberately scans the short fixture without the production byte bounds.
+def VisibleLiteral(query: string): list<list<number>>
+  var found: list<list<number>> = []
+  for lnum in range(1, line('$'))
+    var text = getline(lnum)
+    var start = 0
+    while start < strlen(text)
+      var byte = match(text, '\V' .. escape(query, '\'), start, 1)
+      if byte < 0
+        break
+      endif
+      var cell = screenpos(win_getid(), lnum, byte + 1)
+      if cell.row > 0 && cell.col > 0
+        found->add([lnum, byte + 1])
+      endif
+      start = byte + 1
+    endwhile
+  endfor
+  return found
+enddef
+
+setlocal tabstop=8
+setline(1, repeat(['界é' .. "\t" .. 'ab界é' .. "\t" .. 'x'], 130)->join(''))
+for wrapped in [false, true]
+  &l:wrap = wrapped
+  cursor(1, 39)
+  winrestview({lnum: 1, col: 38, topline: 1, leftcol: wrapped ? 0 : 27})
+  redraw!
+  for needle in ['界é', 'ab', "é\t"]
+    var expected = VisibleLiteral(needle)
+    assert_true(len(expected) > 0, $'fixture {needle} mode {wrapped} has no target')
+    assert_equal(expected, mapnew(simplemotion#FindTargets(needle, false),
+      (_, target) => [target.lnum, target.col]), $'viewport layout mismatch for {needle}, wrap={wrapped}')
+  endfor
+endfor
+
+# A long hidden suffix with no match (or only a late hidden match) still
+# consumes regex work, although neither case increments the screenpos probe
+# counter. Budget the regex input rather than relying on CI wall-clock noise.
+for wrapped in [false, true]
+  &l:wrap = wrapped
+  for tail in ['', 'ab']
+    setline(1, repeat('x', 1024 * 1024) .. tail)
+    cursor(1, 1)
+    winrestview({lnum: 1, col: 0, topline: 1, leftcol: 0, skipcol: 0})
+    redraw!
+    var bytes_before = simplemotion#Counters().regex_bytes
+    assert_equal([], simplemotion#FindTargets('ab', false))
+    var bytes = simplemotion#Counters().regex_bytes - bytes_before
+    var budget = wrapped ? (winheight(0) + 3) * winwidth(0) + 8 : winwidth(0) + 8
+    assert_true(bytes <= budget, $'regex received {bytes} bytes, budget {budget}, wrap={wrapped}')
+  endfor
+endfor
+setlocal wrap
+
 # With cpo-n, wrapped continuation rows reclaim the number column.  The scan
 # bound must use that wider row or it can cut off a target that screenpos says
 # is on the final visible row.
